@@ -6,7 +6,6 @@ from numbers import Number
 from typing import List
 
 import numpy as np
-from mpmath.libmp.libintmath import ifac2
 
 from .ops import ltwh2xywh, ltwh2xyxy, resample_segments, xywh2ltwh, xywh2xyxy, xyxy2ltwh, xyxy2xywh
 
@@ -221,7 +220,7 @@ class Instances:
         ... )
     """
 
-    def __init__(self, bboxes, segments=None, keypoints=None, bbox_format="xywh", normalized=True, ignore_zones=None) -> None:
+    def __init__(self, bboxes, segments=None, keypoints=None, bbox_format="xywh", normalized=True) -> None:
         """
         Initialize the Instances object with bounding boxes, segments, and keypoints.
 
@@ -236,10 +235,6 @@ class Instances:
         self.keypoints = keypoints
         self.normalized = normalized
         self.segments = segments
-        if ignore_zones is not None:
-            self._ignore_zones = Bboxes(ignore_zones, format=bbox_format)
-        else:
-            self._ignore_zones = None
 
     def convert_bbox(self, format):
         """
@@ -249,8 +244,6 @@ class Instances:
             format (str): Target format for conversion, one of 'xyxy', 'xywh', or 'ltwh'.
         """
         self._bboxes.convert(format=format)
-        if self._ignore_zones is not None:
-            self._ignore_zones.convert(format=format)
 
     @property
     def bbox_areas(self):
@@ -267,8 +260,6 @@ class Instances:
             bbox_only (bool, optional): Whether to scale only bounding boxes.
         """
         self._bboxes.mul(scale=(scale_w, scale_h, scale_w, scale_h))
-        if self._ignore_zones is not None:
-            self._ignore_zones.mul(scale=(scale_w, scale_h, scale_w, scale_h))
         if bbox_only:
             return
         self.segments[..., 0] *= scale_w
@@ -288,8 +279,6 @@ class Instances:
         if not self.normalized:
             return
         self._bboxes.mul(scale=(w, h, w, h))
-        if self._ignore_zones is not None:
-            self._ignore_zones.mul(scale=(w, h, w, h))
         self.segments[..., 0] *= w
         self.segments[..., 1] *= h
         if self.keypoints is not None:
@@ -308,8 +297,6 @@ class Instances:
         if self.normalized:
             return
         self._bboxes.mul(scale=(1 / w, 1 / h, 1 / w, 1 / h))
-        if self._ignore_zones is not None:
-            self._ignore_zones.mul(scale=(1 / w, 1 / h, 1 / w, 1 / h))
         self.segments[..., 0] /= w
         self.segments[..., 1] /= h
         if self.keypoints is not None:
@@ -327,8 +314,6 @@ class Instances:
         """
         assert not self.normalized, "you should add padding with absolute coordinates."
         self._bboxes.add(offset=(padw, padh, padw, padh))
-        if self._ignore_zones is not None:
-            self._ignore_zones.add(offset=(padw, padh, padw, padh))
         self.segments[..., 0] += padw
         self.segments[..., 1] += padh
         if self.keypoints is not None:
@@ -353,14 +338,12 @@ class Instances:
         keypoints = self.keypoints[index] if self.keypoints is not None else None
         bboxes = self.bboxes[index]
         bbox_format = self._bboxes.format
-        ignore_zones = self.ignore_zones[index] if len(self.ignore_zones) else self.ignore_zones
         return Instances(
             bboxes=bboxes,
             segments=segments,
             keypoints=keypoints,
             bbox_format=bbox_format,
             normalized=self.normalized,
-            ignore_zones=ignore_zones,
         )
 
     def flipud(self, h):
@@ -375,15 +358,8 @@ class Instances:
             y2 = self.bboxes[:, 3].copy()
             self.bboxes[:, 1] = h - y2
             self.bboxes[:, 3] = h - y1
-            if self.ignore_zones is not None:
-                y1_ignore = self.ignore_zones[:, 1].copy()
-                y2_ignore = self.ignore_zones[:, 3].copy()
-                self.ignore_zones[:, 1] = h - y2_ignore
-                self.ignore_zones[:, 3] = h - y1_ignore
         else:
             self.bboxes[:, 1] = h - self.bboxes[:, 1]
-            if self._ignore_zones is not None:
-                self.ignore_zones[:, 1] = h - self.ignore_zones[:, 1]
         self.segments[..., 1] = h - self.segments[..., 1]
         if self.keypoints is not None:
             self.keypoints[..., 1] = h - self.keypoints[..., 1]
@@ -400,15 +376,8 @@ class Instances:
             x2 = self.bboxes[:, 2].copy()
             self.bboxes[:, 0] = w - x2
             self.bboxes[:, 2] = w - x1
-            if self._ignore_zones is not None:
-                x1_ignore = self.ignore_zones[:, 0].copy()
-                x2_ignore = self.ignore_zones[:, 2].copy()
-                self.ignore_zones[:, 0] = w - x2_ignore
-                self.ignore_zones[:, 2] = w - x1_ignore
         else:
             self.bboxes[:, 0] = w - self.bboxes[:, 0]
-            if self._ignore_zones is not None:
-                self.ignore_zones[:, 0] = w - self.ignore_zones[:, 0]
         self.segments[..., 0] = w - self.segments[..., 0]
         if self.keypoints is not None:
             self.keypoints[..., 0] = w - self.keypoints[..., 0]
@@ -425,9 +394,6 @@ class Instances:
         self.convert_bbox(format="xyxy")
         self.bboxes[:, [0, 2]] = self.bboxes[:, [0, 2]].clip(0, w)
         self.bboxes[:, [1, 3]] = self.bboxes[:, [1, 3]].clip(0, h)
-        if self.ignore_zones is not None:
-            self.ignore_zones[:, [0, 2]] = self.ignore_zones[:, [0, 2]].clip(0, w)  # Clip ignore zones
-            self.ignore_zones[:, [1, 3]] = self.ignore_zones[:, [1, 3]].clip(0, h)
         if ori_format != "xyxy":
             self.convert_bbox(format=ori_format)
         self.segments[..., 0] = self.segments[..., 0].clip(0, w)
@@ -457,7 +423,7 @@ class Instances:
                 self.keypoints = self.keypoints[good]
         return good
 
-    def update(self, bboxes, segments=None, keypoints=None, ignore_zones=None):
+    def update(self, bboxes, segments=None, keypoints=None):
         """
         Update instance variables.
 
@@ -467,8 +433,6 @@ class Instances:
             keypoints (np.ndarray, optional): New keypoints.
         """
         self._bboxes = Bboxes(bboxes, format=self._bboxes.format)
-        if ignore_zones is not None:
-            self._ignore_zones = Bboxes(self.ignore_zones.bboxes, format=self._bboxes.format)
         if segments is not None:
             self.segments = segments
         if keypoints is not None:
@@ -488,8 +452,8 @@ class Instances:
             axis (int, optional): The axis along which the arrays will be concatenated.
 
         Returns:
-            (Instances): A new Instances object containing the concatenated bounding boxes, segments, keypoints,
-                and ignore zones if present.
+            (Instances): A new Instances object containing the concatenated bounding boxes, segments, and keypoints
+                if present.
 
         Notes:
             The `Instances` objects in the list should have the same properties, such as the format of the bounding
@@ -523,18 +487,9 @@ class Instances:
         else:
             cat_segments = np.concatenate([b.segments for b in instances_list], axis=axis)
         cat_keypoints = np.concatenate([b.keypoints for b in instances_list], axis=axis) if use_keypoint else None
-        cat_ignore_zones = np.concatenate([ins.ignore_zones for ins in instances_list], axis=axis)
-
-        return cls(cat_boxes, cat_segments, cat_keypoints, bbox_format, normalized, ignore_zones=cat_ignore_zones)
+        return cls(cat_boxes, cat_segments, cat_keypoints, bbox_format, normalized)
 
     @property
     def bboxes(self):
         """Return bounding boxes."""
         return self._bboxes.bboxes
-
-    @property
-    def ignore_zones(self):
-        """Return bounding boxes."""
-        if self._ignore_zones is None:
-            return None
-        return self._ignore_zones.bboxes

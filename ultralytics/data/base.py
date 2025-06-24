@@ -27,7 +27,7 @@ class BaseDataset(Dataset):
 
     Attributes:
         img_path (str): Path to the folder containing images.
-        imgsz (int): Target image size for resizing.4
+        imgsz (int): Target image size for resizing.
         augment (bool): Whether to apply data augmentation.
         single_cls (bool): Whether to treat all objects as a single class.
         prefix (str): Prefix to print in log messages.
@@ -81,7 +81,6 @@ class BaseDataset(Dataset):
         pad: float = 0.5,
         single_cls: bool = False,
         classes: Optional[List[int]] = None,
-        ignore_zone_cls: Optional[List[int]] = None,
         fraction: float = 1.0,
         channels: int = 3,
     ):
@@ -101,7 +100,6 @@ class BaseDataset(Dataset):
             pad (float): Padding value.
             single_cls (bool): If True, single class training is used.
             classes (List[int], optional): List of included classes.
-            ignore_zone_cls (List[int], optional): List of included classes.
             fraction (float): Fraction of dataset to utilize.
             channels (int): Number of channels in the images (1 for grayscale, 3 for RGB).
         """
@@ -116,7 +114,7 @@ class BaseDataset(Dataset):
         self.cv2_flag = cv2.IMREAD_GRAYSCALE if channels == 1 else cv2.IMREAD_COLOR
         self.im_files = self.get_img_files(self.img_path)
         self.labels = self.get_labels()
-        self.update_labels(include_class=classes, ignore_zone_cls=ignore_zone_cls)  # single_cls and include_class
+        self.update_labels(include_class=classes)  # single_cls and include_class
         self.ni = len(self.labels)  # number of images
         self.rect = rect
         self.batch_size = batch_size
@@ -185,25 +183,20 @@ class BaseDataset(Dataset):
         check_file_speeds(im_files, prefix=self.prefix)  # check image read speeds
         return im_files
 
-    def update_labels(self, include_class: Optional[List[int]], ignore_zone_cls: Optional[List[int]]) -> None:
+    def update_labels(self, include_class: Optional[List[int]]) -> None:
         """
-        Update labels to include only specified classes and set ignore zones.
+        Update labels to include only specified classes.
 
         Args:
             include_class (List[int], optional): List of classes to include. If None, all classes are included.
-            ignore_zone_cls (List[int], optional): List of classes to designate as ignore zones.
         """
-        include_class_array = np.array(include_class).reshape(1, -1) if include_class else None
-        ignore_zone_cls_array = np.array(ignore_zone_cls).reshape(1, -1) if ignore_zone_cls else None
-
+        include_class_array = np.array(include_class).reshape(1, -1)
         for i in range(len(self.labels)):
-            cls = self.labels[i]["cls"]
-            bboxes = self.labels[i]["bboxes"]
-            segments = self.labels[i]["segments"]
-            keypoints = self.labels[i]["keypoints"]
-
-            # Filter classes for inclusion
-            if include_class_array is not None:
+            if include_class is not None:
+                cls = self.labels[i]["cls"]
+                bboxes = self.labels[i]["bboxes"]
+                segments = self.labels[i]["segments"]
+                keypoints = self.labels[i]["keypoints"]
                 j = (cls == include_class_array).any(1)
                 self.labels[i]["cls"] = cls[j]
                 self.labels[i]["bboxes"] = bboxes[j]
@@ -211,13 +204,6 @@ class BaseDataset(Dataset):
                     self.labels[i]["segments"] = [segments[si] for si, idx in enumerate(j) if idx]
                 if keypoints is not None:
                     self.labels[i]["keypoints"] = keypoints[j]
-
-            # Save ignore zones
-            if ignore_zone_cls_array is not None:
-                k = (cls == ignore_zone_cls_array).any(1)
-                self.labels[i]["ignore_zones"] = bboxes[k]
-
-            # Handle single class mode
             if self.single_cls:
                 self.labels[i]["cls"][:, 0] = 0
 
