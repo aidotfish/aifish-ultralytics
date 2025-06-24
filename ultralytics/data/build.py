@@ -128,6 +128,7 @@ def build_yolo_dataset(cfg, img_path, batch, data, mode="train", rect=False, str
         prefix=colorstr(f"{mode}: "),
         task=cfg.task,
         classes=cfg.classes,
+        ignore_zone_cls=cfg.ignore_zone_cls,
         data=data,
         fraction=cfg.fraction if mode == "train" else 1.0,
     )

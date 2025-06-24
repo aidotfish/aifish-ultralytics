@@ -1332,6 +1332,7 @@ class RandomPerspective:
         img, M, scale = self.affine_transform(img, border)
 
         bboxes = self.apply_bboxes(instances.bboxes, M)
+        ignore_zones = self.apply_bboxes(instances.ignore_zones, M)
 
         segments = instances.segments
         keypoints = instances.keypoints
@@ -1341,7 +1342,7 @@ class RandomPerspective:
 
         if keypoints is not None:
             keypoints = self.apply_keypoints(keypoints, M)
-        new_instances = Instances(bboxes, segments, keypoints, bbox_format="xyxy", normalized=False)
+        new_instances = Instances(bboxes, segments, keypoints, bbox_format="xyxy", normalized=False, ignore_zones=ignore_zones)
         # Clip
         new_instances.clip(*self.size)
 
