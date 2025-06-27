@@ -7,6 +7,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from custom_ultralytics_code.utils.loss import BboxLossWithIgnoreZones
+from experiments.ignore_zones.ignore_zone_vis import visualize_feature_scores
 from ultralytics.utils.metrics import OKS_SIGMA
 from ultralytics.utils.ops import crop_mask, xywh2xyxy, xyxy2xywh
 from ultralytics.utils.tal import RotatedTaskAlignedAssigner, TaskAlignedAssigner, dist2bbox, dist2rbox, make_anchors
@@ -212,7 +213,7 @@ class v8DetectionLoss:
         self.use_dfl = m.reg_max > 1
 
         self.assigner = TaskAlignedAssigner(topk=tal_topk, num_classes=self.nc, alpha=0.5, beta=6.0)
-        self.bbox_loss = BboxLossWithIgnoreZones(m.reg_max).to(device)
+        self.bbox_loss = BboxLoss(m.reg_max).to(device)
         self.proj = torch.arange(m.reg_max, dtype=torch.float, device=device)
 
     def preprocess(self, targets: torch.Tensor, batch_size: int, scale_tensor: torch.Tensor) -> torch.Tensor:
@@ -262,6 +263,95 @@ class v8DetectionLoss:
         targets = self.preprocess(targets.to(self.device), batch_size, scale_tensor=imgsz[[1, 0, 1, 0]])
         gt_labels, gt_bboxes = targets.split((1, 4), 2)  # cls, xyxy
         mask_gt = gt_bboxes.sum(2, keepdim=True).gt_(0.0)
+
+        # =================== START: DYNAMIC SHAPE FIX ===================
+
+        # Create a robust mask for valid ground truth boxes.
+        valid_box_mask = (gt_bboxes[..., 2] > gt_bboxes[..., 0]) & (gt_bboxes[..., 3] > gt_bboxes[..., 1])
+
+        # Get the coordinates of the center of each prediction cell (anchor point).
+        scaled_anchor_points = anchor_points * stride_tensor
+
+        # --- FIX: Get the number of anchors dynamically from pred_scores ---
+        num_anchors = pred_scores.shape[1]
+        # --- Create the mask with the CORRECT shape ---
+        cells_to_zero_mask = torch.zeros((batch_size, num_anchors), dtype=torch.bool, device=self.device)
+
+        # Iterate over each image in the batch to populate the mask.
+        for i in range(batch_size):
+            # Find which boxes have class label 0.
+            is_label_0 = (gt_labels[i].squeeze(-1).long() == 0)
+
+            # A box must be BOTH valid (have positive width/height) AND have label 0.
+            final_gt_mask = valid_box_mask[i] & is_label_0
+
+            label_0_indices = final_gt_mask.nonzero(as_tuple=False).squeeze(-1)
+
+            if label_0_indices.numel() > 0:
+                # Get the actual bounding boxes for these indices.
+                gt_bboxes_label_0 = gt_bboxes[i, label_0_indices, :]
+
+                # Get the coordinates of the anchor points.
+                anchors_x = scaled_anchor_points[:, 0]
+                anchors_y = scaled_anchor_points[:, 1]
+
+                # Use broadcasting to efficiently check if each anchor point is inside any of the label 0 boxes.
+                is_inside_x = (anchors_x.unsqueeze(1) >= gt_bboxes_label_0[:, 0].unsqueeze(0)) & \
+                              (anchors_x.unsqueeze(1) < gt_bboxes_label_0[:, 2].unsqueeze(0))
+                is_inside_y = (anchors_y.unsqueeze(1) >= gt_bboxes_label_0[:, 1].unsqueeze(0)) & \
+                              (anchors_y.unsqueeze(1) < gt_bboxes_label_0[:, 3].unsqueeze(0))
+                is_inside = is_inside_x & is_inside_y
+
+                # An anchor is marked if it's inside *any* of the valid label 0 boxes for this image.
+                cells_to_zero_mask[i] = is_inside.any(dim=1)
+
+        # This line should now work without an error
+        pred_scores[cells_to_zero_mask] = 0.0
+        # =================== END: DYNAMIC SHAPE FIX =====================
+#############################################################################
+#############################################################################
+#############################################################################
+#############################################################################
+        # =================== START: VISUALIZATION CALL ===================
+        #
+        # Create a visual test for the first item in the batch every 5 epochs during training.
+        # You can change the condition to whatever works best for you.
+        #
+        # We are assuming 'self.epoch' exists in your class. If not, you can use a
+        # simple counter or remove the epoch condition for a one-time test.
+
+
+        with torch.no_grad():  # Ensure this doesn't affect gradients
+            # Set which item from the batch you want to see
+            item_to_vis = 1
+
+            # We need to get the specific GT boxes with label 0 for this item
+            valid_box_mask = (gt_bboxes[item_to_vis, ..., 2] > gt_bboxes[item_to_vis, ..., 0]) & (
+                        gt_bboxes[item_to_vis, ..., 3] > gt_bboxes[item_to_vis, ..., 1])
+            is_label_0 = (gt_labels[item_to_vis].squeeze(-1).long() == 0)
+            final_gt_mask = valid_box_mask & is_label_0
+            label_0_indices = final_gt_mask.nonzero(as_tuple=False).squeeze(-1)
+
+            # Only create the visualization if there are boxes to show
+            if label_0_indices.numel() > 0:
+                gt_bboxes_to_vis = gt_bboxes[item_to_vis, label_0_indices, :]
+
+                # Make sure your strides are correct for your model
+                strides = [8, 16, 32]
+
+                visualize_feature_scores(
+                    pred_scores_after_masking=pred_scores,
+                    batch=batch,
+                    item_idx_to_vis=item_to_vis,
+                    gt_bboxes_label_0=gt_bboxes_to_vis,
+                    strides=strides,
+                    save_path=f"score_visualization_epoch_item_{item_to_vis}.png"
+                )
+
+                # This flag ensures we only save one image per validation epoch
+                setattr(self, f'_visualized_epoch_', True)
+
+        # =================== END: VISUALIZATION CALL =====================
 
         # Pboxes
         pred_bboxes = self.bbox_decode(anchor_points, pred_distri)  # xyxy, (b, h*w, 4)

@@ -26,8 +26,7 @@ class BboxLossWithIgnoreZones(nn.Module):
         target_scores: torch.Tensor,
         target_scores_sum: torch.Tensor,
         fg_mask: torch.Tensor,
-        ignore_zones: torch.Tensor = None,
-        ignore_zones_iou_threshold: float = 0.5
+        taget_labels: torch.Tensor,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """
         Compute IoU and DFL losses for bounding boxes, excluding boxes in ignore zones.
@@ -40,7 +39,7 @@ class BboxLossWithIgnoreZones(nn.Module):
             target_scores: Target scores
             target_scores_sum: Sum of target scores
             fg_mask: Foreground mask
-            ignore_zones: Ignore zones in [batch_idx, x, y, w, h] format, shape (N, 5)
+            ignore_zones: Ignore zones in [batchno_idx, x, y, w, h] format, shape (N, 5)
                           where N is the total number of ignore zones across all batch samples
         
         Returns:
@@ -68,7 +67,6 @@ class BboxLossWithIgnoreZones(nn.Module):
                     continue
                     
                 # Convert ignore zones from xywh to xyxy format for IoU calculation
-                #TODO: this is still normalized, but should be in pixel coordinates
                 ignore_zones_xyxy = torch.zeros_like(batch_ignore_zones[:, 1:])
                 ignore_zones_xyxy[:, 0] = batch_ignore_zones[:, 1] - batch_ignore_zones[:, 3] / 2  # x1
                 ignore_zones_xyxy[:, 1] = batch_ignore_zones[:, 2] - batch_ignore_zones[:, 4] / 2  # y1

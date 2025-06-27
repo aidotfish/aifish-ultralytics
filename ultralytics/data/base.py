@@ -27,7 +27,7 @@ class BaseDataset(Dataset):
 
     Attributes:
         img_path (str): Path to the folder containing images.
-        imgsz (int): Target image size for resizing.
+        imgsz (int): Target image size for resizing.4
         augment (bool): Whether to apply data augmentation.
         single_cls (bool): Whether to treat all objects as a single class.
         prefix (str): Prefix to print in log messages.
@@ -81,6 +81,7 @@ class BaseDataset(Dataset):
         pad: float = 0.5,
         single_cls: bool = False,
         classes: Optional[List[int]] = None,
+        ignore_zone_cls: Optional[List[int]] = None,
         fraction: float = 1.0,
         channels: int = 3,
     ):
@@ -100,6 +101,7 @@ class BaseDataset(Dataset):
             pad (float): Padding value.
             single_cls (bool): If True, single class training is used.
             classes (List[int], optional): List of included classes.
+            ignore_zone_cls (List[int], optional): List of included classes.
             fraction (float): Fraction of dataset to utilize.
             channels (int): Number of channels in the images (1 for grayscale, 3 for RGB).
         """
