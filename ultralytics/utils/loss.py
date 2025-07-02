@@ -6,6 +6,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from custom_ultralytics_code.utils.loss import BboxLossWithIgnoreZones
+from experiments.ignore_zones.ignore_zone_vis import visualize_feature_scores
 from ultralytics.utils.metrics import OKS_SIGMA
 from ultralytics.utils.ops import crop_mask, xywh2xyxy, xyxy2xywh
 from ultralytics.utils.tal import RotatedTaskAlignedAssigner, TaskAlignedAssigner, dist2bbox, dist2rbox, make_anchors
@@ -207,6 +209,7 @@ class v8DetectionLoss:
         self.no = m.nc + m.reg_max * 4
         self.reg_max = m.reg_max
         self.device = device
+        self.label_to_mask = self.hyp.ignore_zone_cls
 
         self.use_dfl = m.reg_max > 1
 
@@ -262,6 +265,71 @@ class v8DetectionLoss:
         gt_labels, gt_bboxes = targets.split((1, 4), 2)  # cls, xyxy
         mask_gt = gt_bboxes.sum(2, keepdim=True).gt_(0.0)
 
+        # ============ Ignore zone logic ====================
+        # Create a robust mask for valid ground truth boxes.
+        # (0 label is also used for padded detections in this case they have 0,0,0,0 coordinates)
+        valid_box_mask = (gt_bboxes[..., 2] > gt_bboxes[..., 0]) & (gt_bboxes[..., 3] > gt_bboxes[..., 1])
+
+        # Get the coordinates of the center of each prediction cell (anchor point).
+        scaled_anchor_points = anchor_points * stride_tensor
+
+        # Get the number of anchors dynamically from pred_scores
+        num_anchors = pred_scores.shape[1]
+        cells_to_zero_mask = torch.zeros((batch_size, num_anchors), dtype=torch.bool, device=self.device)
+
+        # Iterate over each image in the batch to populate the mask.
+        for i in range(batch_size):
+            # DYNAMICALLY check for the target label
+            is_target_label = (gt_labels[i].squeeze(-1).long() == self.label_to_mask)
+
+            # A box must be BOTH valid AND have the target label.
+            final_gt_mask = valid_box_mask[i] & is_target_label
+
+            label_indices = final_gt_mask.nonzero(as_tuple=False).squeeze(-1)
+
+            if label_indices.numel() > 0:
+                gt_bboxes_to_mask = gt_bboxes[i, label_indices, :]
+
+                anchors_x = scaled_anchor_points[:, 0]
+                anchors_y = scaled_anchor_points[:, 1]
+
+                # Check if anchor points are inside any of the ground truth boxes
+                is_inside_x = (anchors_x.unsqueeze(1) >= gt_bboxes_to_mask[:, 0].unsqueeze(0)) & \
+                              (anchors_x.unsqueeze(1) < gt_bboxes_to_mask[:, 2].unsqueeze(0))
+                is_inside_y = (anchors_y.unsqueeze(1) >= gt_bboxes_to_mask[:, 1].unsqueeze(0)) & \
+                              (anchors_y.unsqueeze(1) < gt_bboxes_to_mask[:, 3].unsqueeze(0))
+                is_inside = is_inside_x & is_inside_y
+
+                cells_to_zero_mask[i] = is_inside.any(dim=1)
+
+        # This line applies the mask created using the dynamic label
+        pred_scores[cells_to_zero_mask] = 0.0
+
+        # =================== VISUALIZATION CALL ===================
+        if True:
+            with torch.no_grad():
+                item_to_vis = 0
+
+                # Get the GT boxes for the specific item using the DYNAMIC label
+                valid_mask_vis = (gt_bboxes[item_to_vis, ..., 2] > gt_bboxes[item_to_vis, ..., 0]) & (
+                            gt_bboxes[item_to_vis, ..., 3] > gt_bboxes[item_to_vis, ..., 1])
+                is_target_label_vis = (gt_labels[item_to_vis].squeeze(-1).long() == self.label_to_mask)
+                final_gt_mask_vis = valid_mask_vis & is_target_label_vis
+                label_indices_vis = final_gt_mask_vis.nonzero(as_tuple=False).squeeze(-1)
+
+                if label_indices_vis.numel() > 0:
+                    gt_bboxes_to_vis = gt_bboxes[item_to_vis, label_indices_vis, :]
+
+                    visualize_feature_scores(
+                        pred_scores_after_masking=pred_scores,
+                        batch=batch,
+                        item_idx_to_vis=item_to_vis,
+                        gt_bboxes_to_vis=gt_bboxes_to_vis,
+                        label_to_mask=self.label_to_mask,  # Pass the dynamic label
+                        strides=[8, 16, 32],
+                        save_path=f"score_vis__label_{self.label_to_mask}.png"
+                    )
+        # =================== VISUALIZATION CALL ===================
         # Pboxes
         pred_bboxes = self.bbox_decode(anchor_points, pred_distri)  # xyxy, (b, h*w, 4)
         # dfl_conf = pred_distri.view(batch_size, -1, 4, self.reg_max).detach().softmax(-1)
