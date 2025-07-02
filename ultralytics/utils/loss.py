@@ -6,7 +6,6 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from custom_ultralytics_code.utils.loss import BboxLossWithIgnoreZones
 from experiments.ignore_zones.ignore_zone_vis import visualize_feature_scores
 from ultralytics.utils.metrics import OKS_SIGMA
 from ultralytics.utils.ops import crop_mask, xywh2xyxy, xyxy2xywh
