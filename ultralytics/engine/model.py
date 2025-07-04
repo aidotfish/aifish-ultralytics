@@ -769,6 +769,8 @@ class Model(torch.nn.Module):
             >>> model = YOLO("yolo11n.pt")
             >>> results = model.train(data="coco8.yaml", epochs=3)
         """
+        LOGGER.warning("Custom Ultralytics code is beeing run!")
+
         self._check_is_pytorch_model()
         if hasattr(self.session, "model") and self.session.model.id:  # Ultralytics HUB session with loaded model
             if any(kwargs):
